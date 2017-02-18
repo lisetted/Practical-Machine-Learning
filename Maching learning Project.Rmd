@@ -1,0 +1,178 @@
+---
+title: "Maching learning project"
+author: "Lisette"
+date: "2/17/2017"
+output: html_document
+---
+##Coursera Practical Machine Learning Final Project
+#The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+```{r include=FALSE}
+#setwd("/Users/Lisette/Data science")
+rm(list =ls())
+library(caret)
+library(dtplyr)
+library(dplyr)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(RColorBrewer)
+library(knitr)
+library(plyr)
+```
+
+First we name the test and training files "train_data" and "test_data." And then we read in the data into two files named "training" and "test."
+
+#Read in files
+```{r}
+
+train_data<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_data<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+training <-read.csv(train_data, na.strings=c("NA","#DIV/0!",""))
+testing <-read.csv(test_data,na.strings=c("NA","#DIV/0!",""))
+```
+
+We are interested in predicting how the subject did the exercise "classe". The train data set has 14718 rows and 160 columns. There are 5 classes of exercise sitting-down, standing-up, standing, walking, and sitting. Measeurments were collected on 8 hours of activities of 4 healthy subjects
+
+Let's partitian the training data into a training and test set from my training set
+```{r include=TRUE}
+set.seed(57)
+inTrain = createDataPartition(training$classe, p = 3/4)[[1]]
+train = training[ inTrain,]
+test = training[-inTrain,]
+```
+
+Next, lets look at how many measurements there are in each classe in the training set.
+```{r eval=TRUE}
+summary(train$classe)
+```
+
+It looks like there is a lot of missing data. Let's identify all the nonull fields and keep them in the train set
+```{r include=TRUE}
+nonull<- nearZeroVar(train, saveMetrics=TRUE)
+train <- train[,nonull$nzv==FALSE]
+```
+
+
+Now that we now have 129 fields in the data set, which ones are there?
+```{r include=TRUE}
+names(train)
+```
+
+We still have the field "X" which is just the index field, we should remove since it is not a measurement and may skew the results.
+```{r include=TRUE}
+train <-select(train, -X)
+
+```
+
+Now we have 128 fields in the dataset, but it looks like there are still quite a few fields with lots of nulls. Let's remove all the fields with more than 60% NA values and create a clean training set
+```{r include=TRUE}
+train_clean <- train #creating another subset to iterate in loop
+for(i in 1:length(train)) { #for every column in the training dataset
+  if( sum( is.na( train[, i] ) ) /nrow(train) >= .6 ) { #if n?? NAs > 60% of total observations
+    for(j in 1:length(train)) {
+      if( length( grep(names(train[i]), names(train_clean)[j]) ) ==1)  { #if the columns are the same:
+        train_clean <- train_clean[ , -j] #Remove that column
+      }   
+    } 
+  }
+}
+
+dim(train_clean)
+```
+
+Now we have 58 variables including fields that only have less than 60% NA values. Let's make sure that the testing data has the same fields.
+```{r include=TRUE}
+cleanfields<- colnames(train_clean)
+cleanfields1<- colnames(train_clean[,-58])
+
+test<-test[cleanfields]
+testing<- testing[cleanfields1]
+
+```
+We also need to make sure the test and training data are the same type by coercing the testing dataset.
+```{r include=TRUE}
+for (i in 1:length(test) ) {
+  for(j in 1:length(train_clean)) {
+    if( length( grep(names(train_clean[i]), names(test)[j]) ) == 1)  {
+      class(test[j]) <- class(train_clean[i])
+    }      
+  }      
+}
+
+testing <- rbind(train_clean[2, -58] , testing)
+testing <- testing[-1,]
+
+```
+
+I now have 3 data sets, training_clean(the testing dataset), test (the validation set), and testing (the final testing dataset).
+
+
+#Prediction Models
+
+Let's run 3 prediction models on training data using all the fields in the clean data; random forest,  gradient boosting, and classification tree.
+
+For each of these techniques, we will run the train function, the predict function and calculate the confusion matrix to get the accuracy.
+
+#Random forests
+```{r include=TRUE}
+rf <- randomForest(classe ~. , data=train_clean )
+pred_rf <- predict(rf, test)
+confusionMatrix(pred_rf, test$classe)
+plot(rf, main="Random Forrest Prediction")
+```
+##General Boosted Regression
+```{r include=TRUE}
+fitControl <- trainControl(method = "repeatedcv",
+                           number = 5,
+                           repeats = 1)
+
+gbm <- train(classe ~ ., data=train_clean, method = "gbm",
+                 trControl = fitControl,
+                 verbose = FALSE)
+pred_gbm <- predict(gbm, test)
+
+confusionMatrix(pred_gbm, test$classe)
+plot(gbm, main="General Boosted Regression")
+
+```
+
+#Classification tree
+```{r}
+class_tree <- train(classe ~ ., data=train_clean, method = "rpart")
+pred_ct <- predict(class_tree, test)
+
+confusionMatrix(pred_ct, test$classe)
+fancyRpartPlot(class_tree$finalModel)
+```
+
+#Combine the models to see if we get something better
+Now that we have run each of these 3 techniques individually, lets combine them to see if we get a better prediction model.
+
+```{r}
+pred_all<- data.frame( pred_rf, pred_gbm, pred_ct, classe= test$classe)
+combModFit <- train(classe ~., method="rf", data=pred_all)
+combPred <- predict(combModFit, pred_all)
+
+#combined accuracy 
+confusionMatrix(combPred, test$classe)$overall[1]
+
+```
+Accuracy of random forrest= 0.9994
+Accuracy of boosting = 0.9961
+Accuracy of classification tree=0.6256 
+Accuracy of combined=0.9993883
+
+The out of sample error is estimated to be 1-0.9994=0.0006 or 0.06%
+
+#Predicting results on the testing data
+Now that we have decided to use the Random forrest technique because it has the highest accuracy, let's run it on the test data that didn't come from my training set ("testing") and see how accurate we are.
+
+The out of sample error is estimated to be 1-0.9994=0.0006 or 0.06%
+```{r}
+
+prediction_final <- predict( rf, newdata=testing, type = "class")
+prediction_final
+```
